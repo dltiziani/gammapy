@@ -2,16 +2,20 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 import numpy as np
 from astropy.io import fits
+from astropy.table import Table
 from astropy.units import Quantity
 from astropy.coordinates import Angle, SkyCoord
 from astropy.convolution.utils import discretize_oversample_2D
+from astropy import log
 from ..morphology import Gauss2DPDF
+from ..utils.scripts import make_path
 from ..utils.array import array_stats_str
 from ..utils.energy import Energy, EnergyBounds
 
 __all__ = [
     'TablePSF',
     'EnergyDependentTablePSF',
+    'PSF3D'
 ]
 
 # Default PSF spline keyword arguments
@@ -765,3 +769,86 @@ class EnergyDependentTablePSF(object):
             self._table_psf_cache[energy_index] = table_psf
 
         return self._table_psf_cache[energy_index]
+
+class PSF3D(object):
+    """Table PSF.
+
+    Parameters
+    ----------
+    
+    """
+    
+    def __init__(self, energy_lo, energy_hi, offset, rad_lo, rad_hi, psf_value, energy_thresh_lo=Quantity(0.1, 'TeV'),
+                 energy_thresh_hi=Quantity(100, 'TeV')):
+        self.energy_lo = energy_lo.to('TeV')
+        self.energy_hi = energy_hi.to('TeV')
+        self.offset = Angle(offset)
+        self.rad_lo = Angle(rad_lo)
+        self.rad_hi = Angle(rad_hi)
+        self.psf_value = psf_value.to('sr^-1')
+        self.energy_thresh_lo = energy_thresh_lo.to('TeV')
+        self.energy_thresh_hi = energy_thresh_hi.to('TeV')
+
+    def info(self):
+        """Print some basic info.
+        """
+        ss = "\nSummary PSF3D info\n"
+        ss += "---------------------\n"
+        ss += array_stats_str(self.energy_lo, 'energy_lo')
+        ss += array_stats_str(self.energy_hi, 'energy_hi')
+        ss += array_stats_str(self.offset, 'offset')
+        ss += array_stats_str(self.rad_lo, 'rad_lo')
+        ss += array_stats_str(self.rad_hi, 'rad_hi')
+        ss += array_stats_str(self.psf_value, 'psf_value')
+
+        # TODO: should quote containment values also
+
+        return ss
+
+    @classmethod
+    def read(cls, filename, hdu='PSF_2D_TABLE'):
+        """Create `PSF3D` from FITS file.
+
+        Parameters
+        ----------
+        filename : str
+            File name
+        """
+        filename = str(make_path(filename))
+        # TODO: implement it so that HDUCLASS is used
+        # http://gamma-astro-data-formats.readthedocs.io/en/latest/data_storage/hdu_index/index.html
+
+        table = Table.read(filename, hdu=hdu)
+        return cls.from_table(table)
+
+    @classmethod
+    def from_table(cls, table):
+        """Create `PSF3D` from `~astropy.table.Table`.
+
+        Parameters
+        ----------
+        table : `~astropy.table.Table`
+            Table Table-PSF info.
+        """
+        theta_lo = table['THETA_LO'].squeeze()
+        theta_hi = table['THETA_HI'].squeeze()
+        offset = (theta_hi + theta_lo) / 2
+        offset = Angle(offset, unit=table['THETA_LO'].unit)
+
+        energy_lo = table['ENERG_LO'].squeeze()
+        energy_hi = table['ENERG_HI'].squeeze()
+        energy_lo = Energy(energy_lo, unit=table['ENERG_LO'].unit)
+        energy_hi = Energy(energy_hi, unit=table['ENERG_HI'].unit)
+
+        rad_lo = Quantity(table['RAD_LO'].squeeze(), table['RAD_LO'].unit)
+        rad_hi = Quantity(table['RAD_HI'].squeeze(), table['RAD_HI'].unit)
+
+        psf_value = Quantity(table['RPSF'].squeeze(), table['RPSF'].unit)
+
+        try:
+            energy_thresh_lo = Quantity(table.meta['LO_THRES'], 'TeV')
+            energy_thresh_hi = Quantity(table.meta['HI_THRES'], 'TeV')
+            return cls(energy_lo, energy_hi, offset, rad_lo, rad_hi, psf_value, energy_thresh_lo, energy_thresh_hi)
+        except KeyError:
+            log.warning('No safe energy thresholds found. Setting to default')
+            return cls(energy_lo, energy_hi, offset, rad_lo, rad_hi, psf_value)
