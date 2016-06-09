@@ -11,6 +11,7 @@ from ..morphology import Gauss2DPDF
 from ..utils.scripts import make_path
 from ..utils.array import array_stats_str
 from ..utils.energy import Energy, EnergyBounds
+from ..utils.fits import table_to_fits_table
 
 __all__ = [
     'TablePSF',
@@ -852,3 +853,38 @@ class PSF3D(object):
         except KeyError:
             log.warning('No safe energy thresholds found. Setting to default')
             return cls(energy_lo, energy_hi, offset, rad_lo, rad_hi, psf_value)
+
+    def to_fits(self):
+        """
+        Convert psf table data to FITS hdu list.
+
+        Returns
+        -------
+        hdu_list : `~astropy.io.fits.HDUList`
+            PSF in HDU list format.
+        """
+        # Set up data
+        names = ['ENERG_LO', 'ENERG_HI', 'THETA_LO', 'THETA_HI',
+                 'RAD_LO', 'RAD_HI', 'RPSF']
+        units = ['TeV', 'TeV', 'deg', 'deg',
+                 'deg', 'deg', 'sr^-1']
+        data = [self.energy_lo, self.energy_hi, self.offset, self.offset,
+                self.rad_lo, self.rad_hi, self.psf_value]
+
+        table = Table()
+        for name_, data_, unit_ in zip(names, data, units):
+            table[name_] = [data_]
+            table[name_].unit = unit_
+
+        hdu = table_to_fits_table(table)
+        hdu.header['LO_THRES'] = self.energy_thresh_lo.value
+        hdu.header['HI_THRES'] = self.energy_thresh_hi.value
+
+        return fits.HDUList([fits.PrimaryHDU(), hdu])
+
+    def write(self, filename, *args, **kwargs):
+        """Write PSF to FITS file.
+
+        Calls `~astropy.io.fits.HDUList.writeto`, forwarding all arguments.
+        """
+        self.to_fits().writeto(filename, *args, **kwargs)
