@@ -806,6 +806,29 @@ class PSF3D(object):
 
         return ss
 
+    def energy_logcenter(self):
+        """Get logcenters of energy bins.
+        
+        Returns
+        -------
+        energies : `~astropy.units.Quantity`
+            Logcenters of energy bins
+        """
+
+        return 10**((np.log10(self.energy_hi/Quantity(1, self.energy_hi.unit))
+                     + np.log10(self.energy_lo/Quantity(1, self.energy_lo.unit))) / 2) * Quantity(1, self.energy_lo.unit)
+
+    def rad_center(self):
+        """Get centers of rad bins.
+        
+        Returns
+        -------
+        rad : `~astropy.coordinates.Angle`
+            Centers of rad bins
+        """
+        
+        return ((self.rad_hi + self.rad_lo) / 2).to('deg')
+        
     @classmethod
     def read(cls, filename, hdu='PSF_2D_TABLE'):
         """Create `PSF3D` from FITS file.
@@ -888,3 +911,77 @@ class PSF3D(object):
         Calls `~astropy.io.fits.HDUList.writeto`, forwarding all arguments.
         """
         self.to_fits().writeto(filename, *args, **kwargs)
+
+    def evaluate(self, energy=None, offset=None, rad=None,
+                 interp_kwargs=None):
+        """Interpolate the value of the `EnergyOffsetArray` at a given offset and Energy.
+
+        Parameters
+        ----------
+        energy : `~astropy.units.Quantity`
+            energy value
+        offset : `~astropy.coordinates.Angle`
+            offset value
+        rad : `~astropy.coordinates.Angle`
+            offset value
+        interp_kwargs : dict
+            option for interpolation for `~scipy.interpolate.RegularGridInterpolator`
+
+        Returns
+        -------
+        values : `~astropy.units.Quantity`
+            Interpolated value
+        """
+        if not interp_kwargs:
+            interp_kwargs = dict(bounds_error=False, fill_value=None)
+
+        from scipy.interpolate import RegularGridInterpolator
+        if energy is None:
+            energy = self.energy_logcenter()
+        if offset is None:
+            offset = self.offset
+        if rad is None:
+            rad = self.rad_center()
+
+        energy = Energy(energy).to('TeV')
+        offset = Angle(offset).to('deg')
+        rad = Angle(rad).to('deg')
+
+        energy_bin = self.energy_logcenter()
+                     
+        offset_bin = self.offset.to('deg')
+        rad_bin = self.rad_center()
+        points = (rad_bin, offset_bin, energy_bin)
+        interpolator = RegularGridInterpolator(points, self.psf_value, **interp_kwargs)
+        rr, off, ee = np.meshgrid(rad.value, offset.value, energy.value, indexing='ij')
+        shape = ee.shape
+        pix_coords = np.column_stack([rr.flat, off.flat, ee.flat])
+        data_interp = interpolator(pix_coords)
+        return Quantity(data_interp.reshape(shape), self.psf_value.unit)
+
+    def to_energy_dependent_table_psf(self, theta=None, exposure=None):
+        """
+        Convert king PSF in table PSF.
+
+        Parameters
+        ----------
+        theta : `~astropy.coordinates.Angle`
+            Offset in the field of view. Default theta = 0 deg
+        exposure : `~astropy.units.Quantity`
+            Energy dependent exposure. Should be in units equivalent to 'cm^2 s'.
+            Default exposure = 1.
+
+        Returns
+        -------
+        table_psf : `~gammapy.irf.EnergyDependentTablePSF`
+            Instance of `EnergyDependentTablePSF`.
+        """
+        energies = self.energy_logcenter()
+
+        # Defaults
+        theta = theta or Angle(0, 'deg')
+        offset = self.rad_center()
+        psf_value = self.evaluate(offset=theta).squeeze().T
+
+        return EnergyDependentTablePSF(energy=energies, offset=offset,
+                                       exposure=exposure, psf_value=psf_value)
