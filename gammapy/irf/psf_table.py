@@ -1008,6 +1008,9 @@ class PSF3D(object):
         theta = theta or Angle(0, 'deg')
         
         psf_value = self.evaluate(energy, theta, interp_kwargs=interp_kwargs).squeeze()
+        for v in psf_value.value:
+            if v != v or v == 0:
+                return None
         table_psf = TablePSF(self.rad_center(), psf_value, **kwargs)
         
         return table_psf
@@ -1042,11 +1045,35 @@ class PSF3D(object):
         for e in range(energy.size):
             for t in range(theta.size):
                 psf = self.to_table_psf(energy[e], theta[t], interp_kwargs)
+                if psf == None:
+                    radius[e, t] = np.nan
+                    continue
                 r = psf.containment_radius(fraction)
                 radius[e, t] = r.value
                 unit = r.unit
         return Quantity(radius.squeeze(), unit)
         
+    def plot_containment_vs_energy(self, fractions=[0.68, 0.95],
+                                   thetas=Angle([0, 1], 'deg'), ax=None, **kwargs):
+        """Plot containment fraction as a function of energy.
+        """
+        import matplotlib.pyplot as plt
+
+        ax = plt.gca() if ax is None else ax
+
+        energy = Energy.equal_log_spacing(
+            self.energy_lo[0], self.energy_hi[-1], 100)
+
+        for theta in thetas:
+            for fraction in fractions:
+                radius = self.containment_radius(energy, theta, fraction).squeeze()
+                label = '{} deg, {:.1f}%'.format(theta, 100 * fraction)
+                ax.plot(energy.value, radius.value, label=label)
+
+        ax.semilogx()
+        ax.legend(loc='best')
+        ax.set_xlabel('Energy (TeV)')
+        ax.set_ylabel('Containment radius (deg)')
 
     def plot_psf_vs_rad(self, filename=None, theta=Angle(0, 'deg'), energy=Quantity(1, 'TeV')):
         """Plot PSF vs rad.
@@ -1076,3 +1103,79 @@ class PSF3D(object):
             plt.savefig(filename)
 
         plt.show()
+
+
+    def plot_containment(self, fraction=0.68, ax=None, show_safe_energy=False,
+                         add_cbar=True, **kwargs):
+        """
+        Plot containment image with energy and theta axes.
+
+        Parameters
+        ----------
+        fraction : float
+            Containment fraction between 0 and 1.
+        add_cbar : bool
+            Add a colorbar
+        """
+        from matplotlib.colors import PowerNorm
+        import matplotlib.pyplot as plt
+        ax = plt.gca() if ax is None else ax
+
+        kwargs.setdefault('cmap', 'afmhot')
+        kwargs.setdefault('norm', PowerNorm(gamma=0.5))
+        kwargs.setdefault('origin', 'lower')
+        kwargs.setdefault('interpolation', 'nearest')
+        # kwargs.setdefault('vmin', 0.1)
+        # kwargs.setdefault('vmax', 0.2)
+
+        # Set up and compute data
+        containment = self.containment_radius(self.energy_logcenter(), self.offset, fraction)
+        print(containment)
+
+        extent = [
+            self.offset[0].value, self.offset[-1].value,
+            self.energy_lo[0].value, self.energy_hi[-1].value,
+        ]
+
+        # Plotting
+        ax.imshow(containment.value, extent=extent, **kwargs)
+
+        if show_safe_energy:
+            # Log scale transformation for position of energy threshold
+            e_min = self.energy_hi.value.min()
+            e_max = self.energy_hi.value.max()
+            e = (self.energy_thresh_lo.value - e_min) / (e_max - e_min)
+            x = (np.log10(e * (e_max / e_min - 1) + 1) / np.log10(e_max / e_min)
+                 * (len(self.energy_hi) + 1))
+            ax.vlines(x, -0.5, len(self.theta) - 0.5)
+            ax.text(x + 0.5, 0, 'Safe energy threshold: {0:3.2f}'.format(self.energy_thresh_lo))
+
+        # Axes labels and ticks, colobar
+        ax.semilogy()
+        ax.set_xlabel('Offset (deg)')
+        ax.set_ylabel('Energy (TeV)')
+
+        if add_cbar:
+            ax_cbar = plt.colorbar(fraction=0.1, pad=0.01, shrink=0.9,
+                                   mappable=ax.images[0], ax=ax)
+            label = 'Containment radius R{0:.0f} (deg)'.format(100 * fraction)
+            ax_cbar.set_label(label)
+
+        return ax
+
+    def peek(self, figsize=(15, 5)):
+        """Quick-look summary plots."""
+        import matplotlib.pyplot as plt
+        fig, axes = plt.subplots(nrows=1, ncols=3, figsize=figsize)
+
+        self.plot_containment(fraction=0.68, ax=axes[0])
+        self.plot_containment(fraction=0.95, ax=axes[1])
+        self.plot_containment_vs_energy(ax=axes[2])
+
+        # TODO: implement this plot
+        # psf = self.psf_at_energy_and_theta(energy='1 TeV', theta='1 deg')
+        # psf.plot_components(ax=axes[2])
+
+        plt.tight_layout()
+        plt.show()
+        return fig
