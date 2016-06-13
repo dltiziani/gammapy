@@ -961,7 +961,7 @@ class PSF3D(object):
 
     def to_energy_dependent_table_psf(self, theta=None, exposure=None):
         """
-        Convert king PSF in table PSF.
+        Convert PSF3D in EnergyDependentTablePSF.
 
         Parameters
         ----------
@@ -985,3 +985,94 @@ class PSF3D(object):
 
         return EnergyDependentTablePSF(energy=energies, offset=offset,
                                        exposure=exposure, psf_value=psf_value)
+    
+    def to_table_psf(self, energy, theta=None, interp_kwargs=None, **kwargs):
+        """Evaluate the `EnergyOffsetArray` at one given energy.
+        
+        Parameters
+        ----------
+        energy : `~astropy.units.Quantity`
+            Energy
+        theta : `~astropy.coordinates.Angle`
+            Offset in the field of view. Default theta = 0 deg
+        interp_kwargs : dict
+            Option for interpolation for `~scipy.interpolate.RegularGridInterpolator`
+            
+        Returns
+        -------
+        table : `~astropy.table.Table`
+            Table with two columns: offset, value
+        """
+        
+        # Defaults
+        theta = theta or Angle(0, 'deg')
+        
+        psf_value = self.evaluate(energy, theta, interp_kwargs=interp_kwargs).squeeze()
+        table_psf = TablePSF(self.rad_center(), psf_value, **kwargs)
+        
+        return table_psf
+
+    def containment_radius(self, energy, theta=None, fraction=0.68, interp_kwargs=None):
+        """Containment radius.
+
+        Parameters
+        ----------
+        energy : `~astropy.units.Quantity`
+            Energy
+        theta : `~astropy.coordinates.Angle`
+            Offset in the field of view. Default theta = 0 deg
+        fraction : float
+            Containment fraction. Default fraction = 0.68
+
+        Returns
+        -------
+        radius : `~astropy.units.Quantity`
+            Containment radius in deg
+        """
+
+        # Defaults
+        theta = theta or Angle(0, 'deg')
+        if energy.ndim == 0:
+            energy = Quantity([energy.value], energy.unit)
+        if theta.ndim == 0:
+            theta = Quantity([theta.value], theta.unit)
+        
+        unit = None
+        radius = np.zeros((energy.size, theta.size))
+        for e in range(energy.size):
+            for t in range(theta.size):
+                psf = self.to_table_psf(energy[e], theta[t], interp_kwargs)
+                r = psf.containment_radius(fraction)
+                radius[e, t] = r.value
+                unit = r.unit
+        return Quantity(radius.squeeze(), unit)
+        
+
+    def plot_psf_vs_rad(self, filename=None, theta=Angle(0, 'deg'), energy=Quantity(1, 'TeV')):
+        """Plot PSF vs rad.
+
+        Parameters
+        ----------
+        TODO
+        """
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(6, 4))
+
+
+        psf = self.evaluate(energy, theta).squeeze()
+        #label = '{0} GeV'.format(1e-3 * energy)
+        #x = np.hstack([-self.theta[::-1], self.theta])
+        plt.plot(self.rad_center(), psf, lw=2)
+        
+        # plt.semilogy()
+        # plt.loglog()
+        #plt.legend()
+        plt.xlim(0.0, self.rad_center()[-1].degree)
+        plt.xlabel('Offset (deg)')
+        plt.ylabel('PSF (1e-6 sr^-1)')
+        plt.tight_layout()
+
+        if filename != None:
+            plt.savefig(filename)
+
+        plt.show()
